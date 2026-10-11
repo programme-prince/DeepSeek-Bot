@@ -92,6 +92,12 @@ var ZH = {
   Connect: "连接",
   "GitHub token": "GitHub token",
   "Create a token on GitHub": "去 GitHub 生成 token",
+  "Gitee token": "Gitee token",
+  "Create a token on Gitee": "去 Gitee 生成 token",
+  "Could not reach Gitee": "连不上 Gitee",
+  "Gitee did not accept this token": "Gitee 不接受这个 token",
+  "Gitee did not say who this token belongs to": "Gitee 没有返回这个 token 的账号",
+  "Gitee addresses must start with https://": "Gitee 地址必须以 https:// 开头",
   "Could not reach GitHub": "连不上 GitHub",
   "GitHub did not accept this token": "GitHub 不接受这个 token",
   "GitHub did not say who this token belongs to": "GitHub 没有返回这个 token 的账号",
@@ -823,6 +829,7 @@ var HOST_ERRORS = [
   [/^The Bot team in (.+) is open in another dsh \((.+)\)\. This window shows the team but cannot change it; close the other one and reload\.$/, "$1 里的 Bot 团队已在另一个 dsh 中打开（$2）。这个窗口只能查看，不能修改；关掉另一个后刷新。"],
   [/^HTTP (\d+)$/, "请求失败（HTTP $1）"],
   [/^GitHub answered (\d+)$/, "GitHub 返回了 $1"],
+  [/^Gitee answered (\d+)$/, "Gitee 返回了 $1"],
   [/^Keep the name under (\d+) characters$/, "名字不能超过 $1 个字"],
   // Memory changes the memory panel asked for; the whole message is matched.
   [/^This looks like a key, token, or password[\s\S]*$/, "看起来像密钥、令牌或密码，记忆不会保存这类内容"],
@@ -9264,14 +9271,18 @@ button.bt-us-row:hover{background:var(--bt-hover)}
 
 // src/client/connectors.js
 var import_react23 = require("react");
-var TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
+var TOKEN_DETAILS = {
+  github: { label: "GitHub token", link: "Create a token on GitHub", url: "https://github.com/settings/personal-access-tokens/new" },
+  gitee: { label: "Gitee token", link: "Create a token on Gitee", url: "https://gitee.com/profile/personal_access_tokens" }
+};
 var GitHubMark = () => (0, import_react23.createElement)(
   "svg",
   { width: 20, height: 20, viewBox: "0 0 16 16", fill: "currentColor", "aria-hidden": true },
   (0, import_react23.createElement)("path", { d: "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" })
 );
-var MARKS = { github: GitHubMark };
-var ABOUT = { github: () => t("Repositories, issues, and pull requests") };
+var GiteeMark = () => (0, import_react23.createElement)("span", { "aria-hidden": true }, "G");
+var MARKS = { github: GitHubMark, gitee: GiteeMark };
+var ABOUT = { github: () => t("Repositories, issues, and pull requests"), gitee: () => t("Repositories, issues, and pull requests") };
 function statusText(connector) {
   if (connector.state === "connecting") return t("Connecting…");
   if (connector.state === "error") return t("Could not connect: {error}", { error: connector.error ?? "" });
@@ -9299,6 +9310,7 @@ function ConnectorRow({ connector, actions }) {
   };
   const on = connector.state !== "off";
   const Mark = MARKS[connector.id];
+  const tokenDetails = TOKEN_DETAILS[connector.id];
   const row = (0, import_react23.useRef)(null);
   useMorph(row, `${form}:${error !== null}:${connector.state}`);
   return (0, import_react23.createElement)(
@@ -9324,11 +9336,11 @@ function ConnectorRow({ connector, actions }) {
     !on && form ? (0, import_react23.createElement)(
       "div",
       { className: "bt-connector-form" },
-      (0, import_react23.createElement)("label", { className: "bt-q-field bt-secret-field" }, (0, import_react23.createElement)(MaskedInput, { value: token, onChange: setToken, onEnter: connect, label: t("GitHub token"), autoFocus: true })),
+      (0, import_react23.createElement)("label", { className: "bt-q-field bt-secret-field" }, (0, import_react23.createElement)(MaskedInput, { value: token, onChange: setToken, onEnter: connect, label: t(tokenDetails?.label ?? "Token"), autoFocus: true })),
       (0, import_react23.createElement)(
         "div",
         { className: "bt-connector-form-row" },
-        (0, import_react23.createElement)("a", { className: "bt-connector-link", href: TOKEN_URL, target: "_blank", rel: "noopener noreferrer" }, t("Create a token on GitHub")),
+        tokenDetails ? (0, import_react23.createElement)("a", { className: "bt-connector-link", href: tokenDetails.url, target: "_blank", rel: "noopener noreferrer" }, t(tokenDetails.link)) : null,
         (0, import_react23.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy, onClick: () => {
           setForm(false);
           setToken("");

@@ -1,169 +1,175 @@
-// Connectors: outside services every Bot can use. GitHub is the first one. Its tools come
-// from GitHub's MCP server through DSH's own MCP client, mounted on the plugin context,
-// so every Bot and Session gets them as mcp__github__<tool>.
-//
-// The token is the GITHUB_TOKEN secret (secrets.js keeps it, redacts it, and offers it to
-// the shell). It reaches GitHub only in the MCP request headers, built here in memory,
-// never written to the DSH profile. A new token is shared with no Bot's shell: the tools
-// do not need it there, and a Bot that reads a planted instruction in an issue could
-// send it anywhere. The Secrets page can still share it. Signing in is `signIn` alone, so a browser login can
-// take its place later without touching the mount.
+// Connector tokens stay in Secrets and reach remote MCP servers only through in-memory headers.
+// New tokens are shared with no Bot shell; the tools do not need the tokens there.
 
 export const GITHUB = 'github'
 export const GITHUB_SECRET = 'GITHUB_TOKEN'
+export const GITEE = 'gitee'
+export const GITEE_SECRET = 'GITEE_TOKEN'
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
-const DEFAULTS = {
-  url: 'https://api.githubcopilot.com/mcp/',
-  api: 'https://api.github.com',
-  toolsets: 'context,repos,issues,pull_requests',
-}
 const CHECK_TIMEOUT_MS = 15_000
-const INSECURE = 'GitHub addresses must start with https://'
 
-// Asks GitHub who the token belongs to. Any token GitHub accepts passes.
-export async function signIn(token, { api = DEFAULTS.api, fetch: request = fetch } = {}) {
+const CONNECTORS = {
+  [GITHUB]: {
+    name: 'GitHub', secret: GITHUB_SECRET,
+    defaults: { url: 'https://api.githubcopilot.com/mcp/', api: 'https://api.github.com', toolsets: 'context,repos,issues,pull_requests' },
+  },
+  [GITEE]: {
+    name: 'Gitee', secret: GITEE_SECRET,
+    defaults: { url: 'https://api.gitee.com/mcp', api: 'https://gitee.com/api/v5' },
+  },
+}
+
+async function checkToken(token, name, api, headers, request, scheme = 'Bearer') {
   let response
   try {
     response = await request(`${api.replace(/\/$/, '')}/user`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'ds-bot', 'X-GitHub-Api-Version': '2022-11-28' },
+      headers: { Authorization: `${scheme} ${token}`, ...headers },
       signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
     })
   } catch {
-    throw new Error('Could not reach GitHub')
+    throw new Error(`Could not reach ${name}`)
   }
-  if (response.status === 401) throw new Error('GitHub did not accept this token')
-  if (!response.ok) throw new Error(`GitHub answered ${response.status}`)
+  if (response.status === 401) throw new Error(`${name} did not accept this token`)
+  if (!response.ok) throw new Error(`${name} answered ${response.status}`)
   const user = await response.json().catch(() => ({}))
-  if (typeof user?.login !== 'string') throw new Error('GitHub did not say who this token belongs to')
+  if (typeof user?.login !== 'string') throw new Error(`${name} did not say who this token belongs to`)
   return { login: user.login }
+}
+
+export function signIn(token, { api = CONNECTORS.github.defaults.api, fetch: request = fetch } = {}) {
+  return checkToken(token, 'GitHub', api, { Accept: 'application/vnd.github+json', 'User-Agent': 'ds-bot', 'X-GitHub-Api-Version': '2022-11-28' }, request)
+}
+
+export function signInGitee(token, { api = CONNECTORS.gitee.defaults.api, fetch: request = fetch } = {}) {
+  return checkToken(token, 'Gitee', api, { Accept: 'application/json' }, request, 'token')
 }
 
 export function install(rt) {
   const { ctx, state } = rt
-  const options = rt.config.github === false ? null : { ...DEFAULTS, ...rt.config.github }
-  const insecure = options !== null && [options.url, options.api].some(address => !/^https:\/\//i.test(String(address)))
-  // `token` is what the current mount was made with, so a changed secret mounts again.
-  let mount = null
-  let status = { state: 'off' }
+  const entries = Object.entries(CONNECTORS).filter(([id]) => rt.config[id] !== false).map(([id, spec]) => ({
+    id, ...spec, options: { ...spec.defaults, ...rt.config[id] },
+  }))
+  const byId = Object.fromEntries(entries.map(entry => [entry.id, entry]))
+  const mounts = Object.fromEntries(entries.map(entry => [entry.id, null]))
+  const statuses = Object.fromEntries(entries.map(entry => [entry.id, { state: 'off' }]))
   let queue = Promise.resolve()
   let stopped = false
 
-  const unmount = async () => {
-    const fiber = mount?.fiber
-    mount = null
-    if (fiber !== undefined) await Promise.resolve().then(() => fiber.dispose()).catch(() => {})
-  }
-
-  // The MCP client wraps the server's answer (a 401, say) as the cause.
-  const reason = (error) => {
+  const reason = error => {
     const text = [error, error?.cause].filter(Boolean).map(part => String(part?.message ?? part)).join(': ')
     return rt.redactSecrets(text || 'error').slice(0, 300)
   }
 
-  async function reconcile(force) {
-    const token = options !== null && !stopped ? rt.secretValue(GITHUB_SECRET) : undefined
-    if (!force && mount !== null && mount.token === token) return
-    await unmount()
+  const secure = entry => [entry.options.url, entry.options.api].every(address => /^https:\/\//i.test(String(address)))
+  const insecureMessage = entry => `${entry.name} addresses must start with https://`
+
+  async function unmount(id) {
+    const fiber = mounts[id]?.fiber
+    mounts[id] = null
+    if (fiber !== undefined) await Promise.resolve().then(() => fiber.dispose()).catch(() => {})
+  }
+
+  async function reconcile(entry, force) {
+    const { id, secret, options } = entry
+    const token = !stopped ? rt.secretValue(secret) : undefined
+    if (!force && mounts[id] !== null && mounts[id].token === token) return
+    await unmount(id)
     if (token === undefined) {
-      status = { state: 'off' }
+      statuses[id] = { state: 'off' }
       return
     }
-    if (insecure) {
-      mount = { token }
-      status = { state: 'error', error: INSECURE }
+    if (!secure(entry)) {
+      mounts[id] = { token }
+      statuses[id] = { state: 'error', error: insecureMessage(entry) }
       return
     }
-    status = { state: 'connecting' }
+    statuses[id] = { state: 'connecting' }
     const loader = ctx.get?.('loader')
     if (typeof loader?.import !== 'function' || typeof ctx.plugin !== 'function') {
-      mount = { token }
-      status = { state: 'error', error: 'This DSH cannot load connectors' }
+      mounts[id] = { token }
+      statuses[id] = { state: 'error', error: 'This DSH cannot load connectors' }
       return
     }
     try {
       const exports = await loader.import(MCP_CLIENT)
       const plugin = loader.unwrapExports?.(exports) ?? exports?.default ?? exports
+      const headers = { Authorization: `Bearer ${token}` }
+      if (id === GITHUB) headers['X-MCP-Toolsets'] = options.toolsets
       const fiber = ctx.plugin(plugin, {
-        transport: 'streamable-http',
-        serverName: GITHUB,
-        url: options.url,
-        headers: { Authorization: `Bearer ${token}`, 'X-MCP-Toolsets': options.toolsets },
-        failOnStartupError: true,
+        transport: 'streamable-http', serverName: id, url: options.url, headers, failOnStartupError: true,
       })
-      mount = { token, fiber }
+      mounts[id] = { token, fiber }
       await fiber.await()
-      if (mount?.fiber !== fiber) return
-      status = { state: 'ready' }
+      if (mounts[id]?.fiber === fiber) statuses[id] = { state: 'ready' }
     } catch (error) {
-      await unmount()
-      mount = { token }
-      status = { state: 'error', error: reason(error) }
-      rt.warn('ds-bot: GitHub connector failed: %s', status.error)
+      await unmount(id)
+      mounts[id] = { token }
+      statuses[id] = { state: 'error', error: reason(error) }
+      rt.warn(`ds-bot: ${entry.name} connector failed: %s`, statuses[id].error)
     }
   }
 
-  // One change at a time; `force` connects again even when the token is the same.
-  const sync = (force = false) => {
-    queue = queue.then(() => reconcile(force)).catch(error => { rt.warn('ds-bot: connectors: %s', reason(error)) })
+  const sync = (id, force = false) => {
+    queue = queue.then(async () => {
+      for (const entry of entries) if (id === undefined || id === entry.id) await reconcile(entry, force)
+    }).catch(error => { rt.warn('ds-bot: connectors: %s', reason(error)) })
     return queue
   }
 
-  const connectorsView = () => options === null ? [] : [{
-    id: GITHUB,
-    name: 'GitHub',
-    state: status.state,
-    ...(status.error !== undefined ? { error: status.error } : {}),
-    account: rt.secretValue(GITHUB_SECRET) !== undefined ? state.connectors?.[GITHUB]?.login ?? null : null,
-  }]
+  const connectorsView = () => entries.map(entry => ({
+    id: entry.id, name: entry.name, state: statuses[entry.id].state,
+    ...(statuses[entry.id].error !== undefined ? { error: statuses[entry.id].error } : {}),
+    account: rt.secretValue(entry.secret) !== undefined ? state.connectors?.[entry.id]?.login ?? null : null,
+  }))
 
   const known = id => {
-    if (options === null || id !== GITHUB) throw new Error('No such connector')
+    const entry = byId[id]
+    if (!entry) throw new Error('No such connector')
+    return entry
   }
 
   const endpoints = {
     async 'connector-connect'(body) {
-      known(body.id)
+      const entry = known(body.id)
       const token = typeof body.token === 'string' ? body.token.trim() : ''
       if (token === '') throw new Error('Paste a token first')
-      if (insecure) throw new Error(INSECURE)
+      if (!secure(entry)) throw new Error(insecureMessage(entry))
       await rt.loadSecrets()
-      const kept = rt.secretValue(GITHUB_SECRET) !== undefined
-      const { login } = await signIn(token, { api: options.api })
-      await rt.secretEndpoint('secret-set', { name: GITHUB_SECRET, value: token, purpose: 'GitHub connector', ...(kept ? {} : { scope: [] }) })
-      state.connectors = { ...state.connectors, [GITHUB]: { login, connectedAt: Date.now() } }
+      const kept = rt.secretValue(entry.secret) !== undefined
+      const { login } = await (entry.id === GITHUB ? signIn : signInGitee)(token, { api: entry.options.api })
+      await rt.secretEndpoint('secret-set', { name: entry.secret, value: token, purpose: `${entry.name} connector`, ...(kept ? {} : { scope: [] }) })
+      state.connectors = { ...state.connectors, [entry.id]: { login, connectedAt: Date.now() } }
       await rt.save()
-      await sync()
+      await sync(entry.id)
       return connectorsView()
     },
     async 'connector-disconnect'(body) {
-      known(body.id)
+      const entry = known(body.id)
       await rt.loadSecrets()
-      if (rt.secretValue(GITHUB_SECRET) !== undefined) await rt.secretEndpoint('secret-delete', { name: GITHUB_SECRET })
-      if (state.connectors?.[GITHUB] !== undefined) {
-        delete state.connectors[GITHUB]
+      if (rt.secretValue(entry.secret) !== undefined) await rt.secretEndpoint('secret-delete', { name: entry.secret })
+      if (state.connectors?.[entry.id] !== undefined) {
+        delete state.connectors[entry.id]
         await rt.save()
       }
-      await sync()
+      await sync(entry.id)
       return connectorsView()
     },
     async 'connector-retry'(body) {
-      known(body.id)
+      const entry = known(body.id)
       await rt.loadSecrets()
-      await sync(true)
+      await sync(entry.id, true)
       return connectorsView()
     },
   }
-
-  const connectorEndpoint = (endpoint, body) => endpoints[endpoint](body ?? {})
 
   ctx.effect(() => {
     stopped = false
     void rt.loadSecrets().then(() => sync())
     return () => {
       stopped = true
-      void unmount()
+      for (const entry of entries) void unmount(entry.id)
     }
   }, 'ds-bot: connectors')
 
-  Object.assign(rt, { connectorsView, connectorEndpoint, secretsChanged: () => { void sync() } })
+  Object.assign(rt, { connectorsView, connectorEndpoint: (endpoint, body) => endpoints[endpoint](body ?? {}), secretsChanged: () => { void sync() } })
 }
