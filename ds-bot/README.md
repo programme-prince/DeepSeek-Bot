@@ -73,7 +73,10 @@ Options go in the profile's `cordis.patch.yml`, under the `bot` entry. All of th
     updateCheck: true               # look for a newer DS Bot when a window opens; default true
     updateRegistry: https://registry.example/   # ask only this npm registry for updates
     github: false                   # hide the GitHub connector; default shown in Connectors
+    gitee: false                    # hide the Gitee connector; default shown in Connectors
 ```
+
+**Connectors**: Settings → Connectors supports GitHub and Gitee. Each uses its own personal access token and remote MCP server. A newly connected token is kept in Secrets and is not shared with Bot shells. Gitee uses `https://api.gitee.com/mcp` and provides repository, issue, and pull request tools.
 
 **Updates**: when a window opens, DS Bot asks where it was installed from for a newer release: the npm registry (the one the DSH plugin manager installs from, then its fallbacks), or the latest GitHub release for a `github:…#vX.Y.Z` install. A newer version shows a cloud button at the top right of the sidebar; **Update** reinstalls DS Bot through the DSH plugin manager, and the new version runs from the next DSH start. A linked or local checkout is never offered an update. Settings → About DS Bot shows the same state, with **Check for updates** to ask again at once.
 

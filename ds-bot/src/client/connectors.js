@@ -3,13 +3,17 @@ import { useMorph } from './motion.js'
 import { MaskedInput } from './secret-card.js'
 import { t } from './i18n.js'
 
-const TOKEN_URL = 'https://github.com/settings/personal-access-tokens/new'
+const TOKEN_DETAILS = {
+  github: { label: 'GitHub token', link: 'Create a token on GitHub', url: 'https://github.com/settings/personal-access-tokens/new' },
+  gitee: { label: 'Gitee token', link: 'Create a token on Gitee', url: 'https://gitee.com/profile/personal_access_tokens' },
+}
 
 export const GitHubMark = () => h('svg', { width: 20, height: 20, viewBox: '0 0 16 16', fill: 'currentColor', 'aria-hidden': true },
   h('path', { d: 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z' }))
 
-const MARKS = { github: GitHubMark }
-const ABOUT = { github: () => t('Repositories, issues, and pull requests') }
+const GiteeMark = () => h('span', { 'aria-hidden': true }, 'G')
+const MARKS = { github: GitHubMark, gitee: GiteeMark }
+const ABOUT = { github: () => t('Repositories, issues, and pull requests'), gitee: () => t('Repositories, issues, and pull requests') }
 
 function statusText(connector) {
   if (connector.state === 'connecting') return t('Connecting…')
@@ -34,6 +38,7 @@ function ConnectorRow({ connector, actions }) {
   }
   const on = connector.state !== 'off'
   const Mark = MARKS[connector.id]
+  const tokenDetails = TOKEN_DETAILS[connector.id]
   const row = useRef(null)
   useMorph(row, `${form}:${error !== null}:${connector.state}`)
   return h('div', { ref: row, className: 'bt-connector', 'data-state': connector.state },
@@ -48,9 +53,9 @@ function ConnectorRow({ connector, actions }) {
           ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy, onClick: () => void run(actions.connectorDisconnect(connector.id)) }, t('Disconnect'))
           : form ? null : h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: () => setForm(true) }, t('Connect')))),
     !on && form ? h('div', { className: 'bt-connector-form' },
-      h('label', { className: 'bt-q-field bt-secret-field' }, h(MaskedInput, { value: token, onChange: setToken, onEnter: connect, label: t('GitHub token'), autoFocus: true })),
+      h('label', { className: 'bt-q-field bt-secret-field' }, h(MaskedInput, { value: token, onChange: setToken, onEnter: connect, label: t(tokenDetails?.label ?? 'Token'), autoFocus: true })),
       h('div', { className: 'bt-connector-form-row' },
-        h('a', { className: 'bt-connector-link', href: TOKEN_URL, target: '_blank', rel: 'noopener noreferrer' }, t('Create a token on GitHub')),
+        tokenDetails ? h('a', { className: 'bt-connector-link', href: tokenDetails.url, target: '_blank', rel: 'noopener noreferrer' }, t(tokenDetails.link)) : null,
         h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy, onClick: () => { setForm(false); setToken(''); setError(null) } }, t('Cancel')),
         h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || token.trim() === '', onClick: connect }, busy ? t('Connecting…') : t('Connect')))) : null,
     error ? h('div', { className: 'bt-connector-error', role: 'alert' }, error) : null)

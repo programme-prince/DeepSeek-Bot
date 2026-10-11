@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { apply } from '../index.js'
-import { signIn } from '../src/host/connectors.js'
+import { signIn, signInGitee } from '../src/host/connectors.js'
 import { fakeContext } from './fake-ctx.js'
 
 const fresh = () => `ghp_${randomBytes(16).toString('hex')}`
@@ -21,6 +21,17 @@ test('signIn asks GitHub who owns the token', async () => {
   await assert.rejects(signIn(token, { fetch: async () => answer(401, {}) }), /did not accept/)
   await assert.rejects(signIn(token, { fetch: async () => answer(500, {}) }), /GitHub answered 500/)
   await assert.rejects(signIn(token, { fetch: async () => { throw new Error(`boom ${token}`) } }), /^Error: Could not reach GitHub$/)
+})
+
+test('signInGitee asks Gitee who owns the token', async () => {
+  const token = fresh()
+  let seen
+  const user = await signInGitee(token, { api: 'https://ge.test/', fetch: async (url, init) => { seen = { url, init }; return answer(200, { login: 'gitee-user' }) } })
+  assert.deepEqual(user, { login: 'gitee-user' })
+  assert.equal(seen.url, 'https://ge.test/user')
+  assert.equal(seen.init.headers.Authorization, `token ${token}`)
+  await assert.rejects(signInGitee(token, { fetch: async () => answer(401, {}) }), /Gitee did not accept/)
+  await assert.rejects(signInGitee(token, { fetch: async () => { throw new Error(`boom ${token}`) } }), /^Error: Could not reach Gitee$/)
 })
 
 const TEAM = {
@@ -41,7 +52,7 @@ const teamHome = () => {
 }
 
 // A loader that hands out a fake MCP client and records each mount.
-function setup({ fail = false, github = { api: 'https://gh.test' } } = {}) {
+function setup({ fail = false, github = { api: 'https://gh.test' }, gitee = false } = {}) {
   const home = teamHome()
   const mounts = []
   const plugin = { name: 'mcp-client', apply() {} }
@@ -60,7 +71,7 @@ function setup({ fail = false, github = { api: 'https://gh.test' } } = {}) {
     }
   }
   capture(ctx)
-  apply(ctx, { home, github })
+  apply(ctx, { home, github, gitee })
   return { ctx, home, mounts }
 }
 
@@ -154,9 +165,78 @@ test('github: false hides the connector', async (t) => {
   const home = teamHome()
   const ctx = fakeContext()
   capture(ctx)
-  apply(ctx, { home, github: false })
+  apply(ctx, { home, github: false, gitee: false })
   t.after(() => { ctx.dispose(); rmSync(home, { recursive: true, force: true }) })
   assert.deepEqual((await call(ctx, 'state', {})).value.connectors, [])
+})
+
+test('Gitee and GitHub mount independently and keep both tokens out of state', async (t) => {
+  const realFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = realFetch })
+  globalThis.fetch = async url => answer(200, { login: url.startsWith('https://ge.test') ? 'gitee-user' : 'octo' })
+  const { ctx, home, mounts } = setup({ gitee: { api: 'https://ge.test' } })
+  t.after(() => { ctx.dispose(); rmSync(home, { recursive: true, force: true }) })
+  const githubToken = fresh()
+  const giteeToken = fresh()
+
+  assert.deepEqual((await call(ctx, 'state', {})).value.connectors.map(connector => connector.id), ['github', 'gitee'])
+  const github = await call(ctx, 'connector-connect', { id: 'github', token: githubToken })
+  assert.equal(github.ok, true)
+  const gitee = await call(ctx, 'connector-connect', { id: 'gitee', token: giteeToken })
+  assert.equal(gitee.ok, true, JSON.stringify(gitee))
+  assert.deepEqual(gitee.value.map(connector => [connector.state, connector.account]), [['ready', 'octo'], ['ready', 'gitee-user']])
+  assert.deepEqual(mounts.map(mount => mount.config.serverName), ['github', 'gitee'])
+  assert.deepEqual(mounts[1].config, {
+    transport: 'streamable-http', serverName: 'gitee', url: 'https://api.gitee.com/mcp',
+    headers: { Authorization: `Bearer ${giteeToken}` }, failOnStartupError: true,
+  })
+  const state = await call(ctx, 'state', {})
+  assert.deepEqual(state.value.secrets.map(secret => [secret.name, secret.scope]).sort((a, b) => a[0].localeCompare(b[0])), [['GITEE_TOKEN', []], ['GITHUB_TOKEN', []]])
+  assert.ok(!JSON.stringify(state).includes(githubToken))
+  assert.ok(!JSON.stringify(state).includes(giteeToken))
+  assert.ok(!readFileSync(join(home, 'state.json'), 'utf8').includes(giteeToken))
+
+  const off = await call(ctx, 'connector-disconnect', { id: 'gitee' })
+  assert.deepEqual(off.value.map(connector => connector.state), ['ready', 'off'])
+  assert.equal(mounts[0].disposed, false)
+  assert.equal(mounts[1].disposed, true)
+  assert.deepEqual((await call(ctx, 'state', {})).value.secrets.map(secret => secret.name), ['GITHUB_TOKEN'])
+})
+
+test('Gitee can be hidden independently', async (t) => {
+  const { ctx, home } = setup({ github: false })
+  t.after(() => { ctx.dispose(); rmSync(home, { recursive: true, force: true }) })
+  assert.deepEqual((await call(ctx, 'state', {})).value.connectors, [])
+  const shown = setup({ github: false, gitee: { api: 'https://ge.test' } })
+  t.after(() => { shown.ctx.dispose(); rmSync(shown.home, { recursive: true, force: true }) })
+  assert.deepEqual((await call(shown.ctx, 'state', {})).value.connectors, [{ id: 'gitee', name: 'Gitee', state: 'off', account: null }])
+})
+
+test('Gitee rejects an invalid token without saving or mounting it', async (t) => {
+  const realFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = realFetch })
+  globalThis.fetch = async () => answer(401, {})
+  const { ctx, home, mounts } = setup({ github: false, gitee: { api: 'https://ge.test' } })
+  t.after(() => { ctx.dispose(); rmSync(home, { recursive: true, force: true }) })
+  const result = await call(ctx, 'connector-connect', { id: 'gitee', token: fresh() })
+  assert.equal(result.ok, false)
+  assert.match(result.error.message, /Gitee did not accept/)
+  assert.deepEqual(mounts, [])
+  assert.deepEqual((await call(ctx, 'state', {})).value.secrets, [])
+})
+
+test('Gitee refuses insecure addresses before sending a token', async (t) => {
+  const realFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = realFetch })
+  let asked = false
+  globalThis.fetch = async () => { asked = true; return answer(200, { login: 'gitee-user' }) }
+  const { ctx, home, mounts } = setup({ github: false, gitee: { api: 'http://ge.test' } })
+  t.after(() => { ctx.dispose(); rmSync(home, { recursive: true, force: true }) })
+  const result = await call(ctx, 'connector-connect', { id: 'gitee', token: fresh() })
+  assert.equal(result.ok, false)
+  assert.match(result.error.message, /Gitee addresses must start with https/)
+  assert.equal(asked, false)
+  assert.deepEqual(mounts, [])
 })
 
 test('a GitHub address without https refuses to send the token', async (t) => {
