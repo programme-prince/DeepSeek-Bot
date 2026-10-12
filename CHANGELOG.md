@@ -4,6 +4,10 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+### Changed
+
+- Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
+
 ## [0.1.2] - 2026-10-11
 
 ### Added

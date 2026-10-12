@@ -4032,7 +4032,7 @@ var TOOL_PHRASES = [
   [/image|photo|draw/i, "Working on an image"]
 ];
 var GROUP_PHRASES = { create_group: "Creating a group", update_group: "Updating the group", delete_group: "Deleting the group", post_to_group: "Posting in the group" };
-function toolActivity(name, arg, findBot) {
+function toolActivity(name, arg, findBot, self2) {
   switch (name) {
     case "ask_user":
       return null;
@@ -4051,7 +4051,7 @@ function toolActivity(name, arg, findBot) {
     case "create_bot":
       return { label: t("Creating {name}", { name: arg("name") ?? t("a Bot") }), state: "sending" };
     case "update_bot": {
-      const target = findBot(arg("name")) ?? findBot(arg("bot"));
+      const target = findBot(arg("name")) ?? findBot(arg("bot")) ?? (arg("bot") ? void 0 : self2);
       return { label: t("Updating {name}", { name: target?.name ?? t("a Bot") }), state: "sending" };
     }
     case "list_bots":
@@ -4157,7 +4157,7 @@ function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
   const tool = toolName(root);
   const { text: arg, value: argValue } = toolArgs(root);
   const findBot = (nameOrId) => roster.byId[nameOrId] ?? roster.bots.find((bot) => bot.name.toLowerCase() === String(nameOrId ?? "").toLowerCase());
-  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, done || hidden ? null : toolActivity(tool, arg, findBot));
+  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, done || hidden ? null : toolActivity(tool, arg, findBot, roster.byId[sessionId]));
   if (hidden) return null;
   switch (tool) {
     case "message_bot": {
@@ -4171,7 +4171,7 @@ function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       return (0, import_react6.createElement)(EventLine, { prefix: t("Created"), bots: [created], onOpen: (bot) => actions.openSession(bot.id) });
     }
     case "update_bot": {
-      const target = findBot(arg("name")) ?? findBot(arg("bot"));
+      const target = findBot(arg("name")) ?? findBot(arg("bot")) ?? (arg("bot") ? void 0 : roster.byId[sessionId]);
       return done && target ? (0, import_react6.createElement)(EventLine, { prefix: t("Updated"), bots: [target], onOpen: (bot) => actions.openSession(bot.id) }) : null;
     }
     case "group_relay":

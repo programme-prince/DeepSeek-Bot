@@ -113,9 +113,9 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'update_bot',
-    description: 'Main Bot only. Rename a Bot or change its role, color, model, or instructions.',
+    description: 'Change a Bot\'s name, role, color, model, or instructions. Every Bot may change itself; only a Main Bot may change another Bot.',
     parameters: {
-      bot: { type: 'string', required: true, description: 'Current Bot name' },
+      bot: { type: 'string', description: 'Current name of the Bot to change; leave out to change yourself' },
       name: { type: 'string', description: 'New name' },
       role: { type: 'string', description: 'New role label' },
       instructions: { type: 'string', description: 'Replacement instructions' },
@@ -125,9 +125,12 @@ export function install(rt) {
     output,
     async execute(args, exec) {
       await rt.load()
-      if (!rt.isMain(rt.selfOf(exec.agent?.id))) return 'Only the Main Bot can update Bots.'
-      const bot = rt.findBot(args.bot)
+      const self = rt.selfOf(exec.agent?.id)
+      const caller = rt.botOf(self)
+      if (caller === undefined) return 'Only Bots on the team can use update_bot.'
+      const bot = args.bot ? rt.findBot(args.bot) : caller
       if (bot === undefined) return `No Bot named ${args.bot}.`
+      if (bot.id !== caller.id && !rt.isMain(self)) return 'Only a Main Bot can change another Bot. Leave out bot to change yourself, or ask a Main Bot with message_bot.'
       try {
         const { name: newName, role, instructions, color, model } = args
         const next = await rt.updateBot(bot.id, { name: newName, role, instructions, color, ...(model ? { model } : {}) })

@@ -441,7 +441,7 @@ const TOOL_PHRASES = [
   [/image|photo|draw/i, 'Working on an image'],
 ]
 const GROUP_PHRASES = { create_group: 'Creating a group', update_group: 'Updating the group', delete_group: 'Deleting the group', post_to_group: 'Posting in the group' }
-function toolActivity(name, arg, findBot) {
+function toolActivity(name, arg, findBot, self) {
   switch (name) {
     case 'ask_user': return null
     case 'request_secret': return null
@@ -454,7 +454,7 @@ function toolActivity(name, arg, findBot) {
     }
     case 'create_bot': return { label: t('Creating {name}', { name: arg('name') ?? t('a Bot') }), state: 'sending' }
     case 'update_bot': {
-      const target = findBot(arg('name')) ?? findBot(arg('bot'))
+      const target = findBot(arg('name')) ?? findBot(arg('bot')) ?? (arg('bot') ? undefined : self)
       return { label: t('Updating {name}', { name: target?.name ?? t('a Bot') }), state: 'sending' }
     }
     case 'list_bots': return { label: t('Checking the team'), state: 'searching' }
@@ -538,7 +538,7 @@ export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
   const { text: arg, value: argValue } = toolArgs(root)
   const findBot = nameOrId => roster.byId[nameOrId] ?? roster.bots.find(bot => bot.name.toLowerCase() === String(nameOrId ?? '').toLowerCase())
   // A running tool shows only as the activity row's phrase.
-  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, done || hidden ? null : toolActivity(tool, arg, findBot))
+  useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, done || hidden ? null : toolActivity(tool, arg, findBot, roster.byId[sessionId]))
   if (hidden) return null
   switch (tool) {
     case 'message_bot': {
@@ -552,7 +552,7 @@ export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       return h(EventLine, { prefix: t('Created'), bots: [created], onOpen: bot => actions.openSession(bot.id) })
     }
     case 'update_bot': {
-      const target = findBot(arg('name')) ?? findBot(arg('bot'))
+      const target = findBot(arg('name')) ?? findBot(arg('bot')) ?? (arg('bot') ? undefined : roster.byId[sessionId])
       return done && target ? h(EventLine, { prefix: t('Updated'), bots: [target], onOpen: bot => actions.openSession(bot.id) }) : null
     }
     case 'group_relay':
